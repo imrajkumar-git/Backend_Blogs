@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG =  os.getenv("DEBUG", "True") == "True"
-FRONTEND_URL = config("FRONTEND_URL")
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # Base URL used when building links inside emails (e.g. a "click to verify"
 # link, if you add one later). Falls back to FRONTEND_URL if not set.
 EMAIL_PAGE_DOMAIN = config("EMAIL_PAGE_DOMAIN", default=FRONTEND_URL)
@@ -57,7 +57,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://full-stack-django-nextjs-otpwithjwt.vercel.app",
 ]
 ALLOWED_HOSTS = [
-    "https://backend-blogs-sspm.onrender.com/",
+    "backend-blogs-sspm.onrender.com",
 ]
 
 TEMPLATES = [

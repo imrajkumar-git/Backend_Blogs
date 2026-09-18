@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.auth import get_user_model
 from rest_framework import generics, status, viewsets
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -19,6 +21,7 @@ from .serializers import (
 from .utils import create_and_send_otp
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class RegisterView(generics.CreateAPIView):
@@ -31,10 +34,26 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        create_and_send_otp(user, purpose="register")
+
+        try:
+            create_and_send_otp(user, purpose="register")
+            email_sent = True
+        except Exception:
+            # Don't let an SMTP hiccup (a common issue on hosts that
+            # throttle outbound SMTP) turn a successful signup into a
+            # 500 or a hung request. The account still exists; the user
+            # can use "resend code" once email delivery is working.
+            logger.exception("Failed to send registration OTP to %s", user.email)
+            email_sent = False
+
+        detail = (
+            "Account created. Please check your email for the verification code."
+            if email_sent
+            else "Account created, but we couldn't send the verification email right now. "
+                 "Please use 'resend code' in a moment."
+        )
         return Response(
-            {"detail": "Account created. Please check your email for the verification code.",
-             "email": user.email},
+            {"detail": detail, "email": user.email, "email_sent": email_sent},
             status=status.HTTP_201_CREATED,
         )
 

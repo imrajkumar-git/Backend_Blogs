@@ -50,15 +50,15 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "core.urls"
-CORS_ALLOWED_ORIGINS = [
-    "https://full-stack-django-nextjs-otpwithjwt.vercel.app",
-]
-CSRF_TRUSTED_ORIGINS = [
-    "https://full-stack-django-nextjs-otpwithjwt.vercel.app",
-]
-ALLOWED_HOSTS = [
-    "backend-blogs-sspm.onrender.com",
-]
+ALLOWED_HOSTS = config(
+    "ALLOWED_HOSTS",
+    default="backend-blogs-sspm.onrender.com",
+    cast=Csv(),
+)
+# CORS_ALLOWED_ORIGINS / CSRF_TRUSTED_ORIGINS are the single source of truth
+# for allowed frontend origins — set further down, once, from FRONTEND_URL /
+# the CORS_ALLOWED_ORIGINS env var. (Previously this was defined twice in
+# this file; the second definition silently won, which was confusing.)
 
 TEMPLATES = [
     {
@@ -189,9 +189,14 @@ EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.
 EMAIL_HOST = config("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
-EMAIL_HOST_USER = 'rajkumararyal0977@gmail.com'
-EMAIL_HOST_PASSWORD = 'pnierfurujtkbsbe'
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER)
+# Without this, a blocked/throttled SMTP port (common on Render's free tier)
+# can hang the whole request until the platform's own proxy times it out —
+# which returns a response with NO CORS headers at all, and looks in the
+# browser exactly like a CORS misconfiguration even though CORS is fine.
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=10, cast=int)
 
 # If no Gmail creds are set, fall back to printing emails to the console
 # so registration still works during local development.

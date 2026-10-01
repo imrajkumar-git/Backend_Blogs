@@ -4,9 +4,7 @@ from django.db import models
 
 
 class Review(models.Model):
-    """
-    One review/testimonial per user (creating again updates the existing one).
-    """
+    # One review per member; posting again updates it.
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="review"
     )
@@ -18,7 +16,7 @@ class Review(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        ordering = ["-created_at", "-id"]
 
     def __str__(self):
-        return f"{self.user} — {self.rating}★"
+        return f"{self.user} — {self.rating}/5"

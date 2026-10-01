@@ -1,133 +1,192 @@
-from django.contrib.auth import get_user_model, authenticate
+from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import RegexValidator, URLValidator
+from django.conf import settings
 from rest_framework import serializers
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework.exceptions import APIException
 
-from .models import OTP
+from common.categories import CATEGORY_IDS
+from common.files import delete_stored_file_after_commit
+from common.uploads import clean_image_upload
 
 User = get_user_model()
 
+SOCIAL_FIELDS = ("website_url", "twitter_url", "instagram_url", "linkedin_url", "github_url")
 
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    password2 = serializers.CharField(write_only=True)
+
+class LenientURLField(serializers.CharField):
+    """http(s) URL; adds https:// if the user typed 'github.com/me'."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("required", False)
+        kwargs.setdefault("allow_blank", True)
+        kwargs.setdefault("max_length", 200)
+        super().__init__(**kwargs)
+        self.validators.append(URLValidator(schemes=["http", "https"]))
+
+    def run_validation(self, data=serializers.empty):
+        if isinstance(data, str):
+            data = data.strip()
+            if data and "://" not in data:
+                data = "https://" + data
+        return super().run_validation(data)
+
+
+class UsernameUniquenessMixin:
+    def validate_username(self, value):
+        qs = User.objects.filter(username__iexact=value)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("A user with that username already exists.")
+        return value
+
+
+class PublicUserSerializer(serializers.ModelSerializer):
+    """Minimal author/commenter info — never includes email."""
 
     class Meta:
         model = User
-        fields = ["username", "email", "password", "password2"]
+        fields = ("id", "username", "profile_picture")
+        read_only_fields = fields
+
+
+class UserSerializer(UsernameUniquenessMixin, serializers.ModelSerializer):
+    """The signed-in user's own profile (login response, /profile/)."""
+
+    website_url = LenientURLField()
+    twitter_url = LenientURLField()
+    instagram_url = LenientURLField()
+    linkedin_url = LenientURLField()
+    github_url = LenientURLField()
+    profile_picture = serializers.FileField(required=False)
+    preferred_categories = serializers.ListField(
+        child=serializers.ChoiceField(choices=CATEGORY_IDS), required=False
+    )
+    phone_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=32,
+        validators=[RegexValidator(r"^[0-9+()\-.\s]*$", "Enter a valid phone number.")],
+    )
+
+    class Meta:
+        model = User
+        fields = (
+            "id", "username", "email", "first_name", "last_name", "phone_number", "bio",
+            "profile_picture", *SOCIAL_FIELDS, "preferred_categories",
+            "is_verified", "is_staff", "is_active", "date_joined",
+        )
+        read_only_fields = ("id", "email", "is_verified", "is_staff", "is_active", "date_joined")
+
+    def validate_profile_picture(self, value):
+        return clean_image_upload(value, settings.AVATAR_MAX_BYTES)
+
+    def update(self, instance, validated_data):
+        old_name = instance.profile_picture.name
+        storage = instance.profile_picture.storage
+        instance = super().update(instance, validated_data)
+        if old_name and instance.profile_picture.name != old_name:
+            delete_stored_file_after_commit(storage, old_name)
+        return instance
+
+
+class RegisterSerializer(UsernameUniquenessMixin, serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+    password2 = serializers.CharField(write_only=True, trim_whitespace=False)
+    preferred_categories = serializers.ListField(
+        child=serializers.ChoiceField(choices=CATEGORY_IDS), required=False
+    )
+    phone_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=32,
+        validators=[RegexValidator(r"^[0-9+()\-.\s]*$", "Enter a valid phone number.")],
+    )
+
+    class Meta:
+        model = User
+        fields = (
+            "username", "email", "password", "password2", "first_name", "last_name",
+            "phone_number", "bio", "preferred_categories",
+        )
 
     def validate_email(self, value):
-        value = value.lower().strip()
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("An account with this email already exists.")
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("A user with that email already exists.")
         return value
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password2"]:
-            raise serializers.ValidationError({"password2": "Passwords do not match."})
+            raise serializers.ValidationError({"password2": ["Passwords don't match."]})
+        candidate = User(
+            username=attrs.get("username", ""),
+            email=attrs.get("email", ""),
+            first_name=attrs.get("first_name", ""),
+            last_name=attrs.get("last_name", ""),
+        )
+        try:
+            validate_password(attrs["password"], user=candidate)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError({"password": list(exc.messages)})
         return attrs
 
     def create(self, validated_data):
         validated_data.pop("password2")
         password = validated_data.pop("password")
-        user = User(**validated_data)
-        user.set_password(password)
-        # Inactive-for-login-purposes until OTP verified. We keep is_active=True
-        # so Django admin login for staff still works, but gate API login on
-        # is_verified instead.
-        user.is_verified = False
-        user.save()
-        return user
+        return User.objects.create_user(password=password, **validated_data)
 
 
-class VerifyOTPSerializer(serializers.Serializer):
+class InvalidCredentials(APIException):
+    # 400, not 401: the frontend's axios interceptor treats 401 as "token expired".
+    status_code = 400
+    default_detail = "Invalid email or password."
+    default_code = "invalid_credentials"
+
+
+class AccountNotAllowed(APIException):
+    status_code = 403
+    default_code = "account_not_allowed"
+
+
+class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    code = serializers.CharField(max_length=6)
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
 
     def validate(self, attrs):
-        email = attrs["email"].lower().strip()
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            raise serializers.ValidationError("No account found with this email.")
-
-        if user.is_verified:
-            raise serializers.ValidationError("This account is already verified.")
-
-        otp = OTP.objects.filter(
-            user=user, code=attrs["code"], purpose="register", is_used=False
-        ).order_by("-created_at").first()
-
-        if not otp:
-            raise serializers.ValidationError("Invalid verification code.")
-        if otp.is_expired():
-            raise serializers.ValidationError("This code has expired. Please request a new one.")
-
+        email = attrs["email"].strip().lower()
+        user = User.objects.filter(email=email).first()
+        if user is None:
+            User().set_password(attrs["password"])  # equalise timing, no user enumeration
+            raise InvalidCredentials()
+        if not user.check_password(attrs["password"]):
+            raise InvalidCredentials()
+        # Only reveal account state once the password is proven correct.
+        if not user.is_active:
+            raise AccountNotAllowed("This account has been disabled. Please contact the site owner.")
+        if not user.is_verified:
+            raise AccountNotAllowed("Your account is pending admin verification.")
         attrs["user"] = user
-        attrs["otp"] = otp
         return attrs
 
 
-class ResendOTPSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-
-    def validate_email(self, value):
-        value = value.lower().strip()
-        try:
-            user = User.objects.get(email=value)
-        except User.DoesNotExist:
-            raise serializers.ValidationError("No account found with this email.")
-        if user.is_verified:
-            raise serializers.ValidationError("This account is already verified.")
-        return value
-
-
-class LoginSerializer(TokenObtainPairSerializer):
-    """
-    Login with email + password. Blocks login until the account
-    has completed OTP email verification.
-    """
-    username_field = User.USERNAME_FIELD
+class AdminUserSerializer(UsernameUniquenessMixin, serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = (
+            "id", "username", "email", "first_name", "last_name", "phone_number",
+            "profile_picture", "is_staff", "is_active", "is_verified", "date_joined",
+        )
+        read_only_fields = ("id", "email", "phone_number", "profile_picture", "date_joined")
 
     def validate(self, attrs):
-        email = attrs.get("email").lower().strip()
-        password = attrs.get("password")
-
-        user = authenticate(request=self.context.get("request"), email=email, password=password)
-
-        if user is None:
-            raise serializers.ValidationError("Invalid email or password.")
-        if not user.is_verified:
-            raise serializers.ValidationError("Please verify your email with the OTP sent to you before logging in.")
-
-        data = super().validate(attrs)
-        data["user"] = UserSerializer(user).data
-        return data
-
-
-class UserSerializer(serializers.ModelSerializer):
-    """Serializer for a user viewing/editing their OWN data, including
-    their public profile (avatar, bio, social links)."""
-
-    profile_picture = serializers.ImageField(required=False, allow_null=True)
-
-    class Meta:
-        model = User
-        fields = [
-            "id", "username", "email", "first_name", "last_name",
-            "is_staff", "is_verified", "date_joined",
-            "bio", "profile_picture",
-            "website_url", "twitter_url", "instagram_url", "linkedin_url", "github_url",
-        ]
-        read_only_fields = ["id", "email", "is_staff", "is_verified", "date_joined"]
-
-
-class AdminUserSerializer(serializers.ModelSerializer):
-    """Serializer used by admins to view/update/delete ANY user."""
-
-    class Meta:
-        model = User
-        fields = ["id", "username", "email", "first_name", "last_name",
-                  "is_staff", "is_active", "is_verified", "date_joined", "last_login",
-                  "bio", "profile_picture"]
-        read_only_fields = ["id", "date_joined", "last_login", "bio", "profile_picture"]
+        request = self.context["request"]
+        if self.instance is not None and self.instance.pk == request.user.pk:
+            for flag in ("is_staff", "is_active", "is_verified"):
+                if attrs.get(flag) is False:
+                    raise serializers.ValidationError(
+                        {flag: "You can't remove this from your own account."}
+                    )
+        return attrs

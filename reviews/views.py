@@ -1,38 +1,49 @@
-from rest_framework import viewsets
-from rest_framework.decorators import action
+from django.http import JsonResponse
+from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from accounts.api_permissions import IsOwnerOrAdminOrReadOnly, IsVerifiedUser
+from common.permissions import IsOwnerOrStaff
 
 from .models import Review
 from .serializers import ReviewSerializer
 
 
-class ReviewViewSet(viewsets.ModelViewSet):
-    """
-    Public read access to all reviews. A verified, logged-in user may
-    create ONE review; submitting again updates their existing review
-    instead of creating a duplicate. Only the owner or an admin may
-    edit/delete a given review.
-    """
-    queryset = Review.objects.select_related("user").all()
+class ReviewListCreateView(generics.ListCreateAPIView):
+    """GET /api/reviews/ is public. POST creates the caller's review, or
+    updates it if they already have one (the frontend re-POSTs to edit)."""
+
+    queryset = Review.objects.select_related("user")
     serializer_class = ReviewSerializer
-    permission_classes = [IsAuthenticatedOrReadOnly, IsVerifiedUser, IsOwnerOrAdminOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def create(self, request, *args, **kwargs):
-        # One review per user: if they already have one, update it instead
-        # of erroring out on the OneToOne constraint.
         existing = Review.objects.filter(user=request.user).first()
-        serializer = self.get_serializer(existing, data=request.data, partial=bool(existing))
+        serializer = self.get_serializer(existing, data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save(user=request.user)
-        return Response(serializer.data, status=200 if existing else 201)
+        code = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
+        return Response(serializer.data, status=code)
 
-    @action(detail=False, methods=["get"], permission_classes=[IsAuthenticated])
-    def mine(self, request):
-        """Return the current user's own review, if any."""
-        review = Review.objects.filter(user=request.user).first()
-        if not review:
-            return Response(None)
-        return Response(self.get_serializer(review).data)
+
+class MyReviewView(APIView):
+    """GET /api/reviews/mine/ — the caller's review, or JSON `null`.
+
+    Always 200: the frontend treats any error here as "could not load reviews".
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        review = Review.objects.select_related("user").filter(user=request.user).first()
+        if review is None:
+            return JsonResponse(None, safe=False)
+        return Response(ReviewSerializer(review, context={"request": request}).data)
+
+
+class ReviewDestroyView(generics.DestroyAPIView):
+    """DELETE /api/reviews/<id>/ — the review's author or staff."""
+
+    queryset = Review.objects.select_related("user")
+    permission_classes = [IsAuthenticated, IsOwnerOrStaff]

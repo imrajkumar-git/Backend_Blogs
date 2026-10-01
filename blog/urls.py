@@ -1,12 +1,12 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from django.urls import include, path
+from rest_framework.routers import SimpleRouter
 
-from .views import PostViewSet, CommentDeleteView
+from .views import CommentDestroyView, PostViewSet
 
-router = DefaultRouter()
-router.register(r"posts", PostViewSet, basename="posts")
+router = SimpleRouter()
+router.register(r"posts", PostViewSet, basename="post")
 
 urlpatterns = [
-    path("comments/<int:pk>/", CommentDeleteView.as_view(), name="comment-delete"),
+    path("comments/<int:pk>/", CommentDestroyView.as_view(), name="comment-detail"),
     path("", include(router.urls)),
 ]

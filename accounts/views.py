@@ -1,110 +1,99 @@
 from django.contrib.auth import get_user_model
-from rest_framework import generics, status, viewsets
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from django.contrib.auth.models import update_last_login
+from rest_framework import generics, mixins, status, viewsets
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import AllowAny, BasePermission, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import OTP
-from .permissions import IsAdminStaff
 from .serializers import (
-    RegisterSerializer,
-    VerifyOTPSerializer,
-    ResendOTPSerializer,
-    LoginSerializer,
-    UserSerializer,
     AdminUserSerializer,
+    LoginSerializer,
+    RegisterSerializer,
+    UserSerializer,
 )
-from .utils import create_and_send_otp
 
 User = get_user_model()
 
 
 class RegisterView(generics.CreateAPIView):
-    """Create a new (unverified) user and email them an OTP code."""
-    queryset = User.objects.all()
+    """POST /api/auth/register/ — creates an *unverified* account."""
+
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+    # Ignore any stale Authorization header the frontend may attach.
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "register"
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        create_and_send_otp(user, purpose="register")
+        data = UserSerializer(user, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    """POST /api/auth/login/ {email, password} -> {access, refresh, user}."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
+
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data["user"]
+        update_last_login(None, user)
+        refresh = RefreshToken.for_user(user)
         return Response(
-            {"detail": "Account created. Please check your email for the verification code.",
-             "email": user.email},
-            status=status.HTTP_201_CREATED,
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": UserSerializer(user, context={"request": request}).data,
+            }
         )
 
 
-class VerifyOTPView(APIView):
-    """Verify the OTP code and activate the account."""
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = VerifyOTPSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data["user"]
-        otp = serializer.validated_data["otp"]
-
-        otp.is_used = True
-        otp.save(update_fields=["is_used"])
-
-        user.is_verified = True
-        user.save(update_fields=["is_verified"])
-
-        return Response({"detail": "Email verified successfully. You can now log in."})
-
-
-class ResendOTPView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = ResendOTPSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = User.objects.get(email=serializer.validated_data["email"])
-        create_and_send_otp(user, purpose="register")
-        return Response({"detail": "A new verification code has been sent to your email."})
-
-
-class LoginView(TokenObtainPairView):
-    """Email + password login. Returns access & refresh tokens + user info."""
-    serializer_class = LoginSerializer
-    permission_classes = [AllowAny]
-
-
 class ProfileView(generics.RetrieveUpdateAPIView):
-    """
-    A logged-in user can view/update ONLY their own data — including
-    uploading a profile picture (multipart/form-data) alongside the
-    usual JSON fields.
-    Regular users cannot escalate is_staff / is_verified through this
-    endpoint (those fields are read_only on UserSerializer).
-    """
+    """GET/PATCH /api/auth/profile/ — the signed-in user's own data."""
+
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self):
         return self.request.user
 
 
-class AdminUserViewSet(viewsets.ModelViewSet):
-    """
-    Full CRUD over ALL users — admin (is_staff) only.
-    Supports list, retrieve, partial_update (edit), destroy (delete).
-    """
-    queryset = User.objects.all().order_by("-date_joined")
-    serializer_class = AdminUserSerializer
-    permission_classes = [IsAuthenticated, IsAdminStaff]
+class CanManageTarget(BasePermission):
+    """Only superusers may modify or delete superuser accounts."""
 
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        if instance.id == request.user.id:
-            return Response(
-                {"detail": "You cannot delete your own admin account from here."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return super().destroy(request, *args, **kwargs)
+    def has_object_permission(self, request, view, obj):
+        return request.user.is_superuser or not obj.is_superuser
+
+
+class AdminUserViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """/api/auth/admin/users/ — staff-only user management."""
+
+    serializer_class = AdminUserSerializer
+    permission_classes = [IsAdminUser, CanManageTarget]
+    http_method_names = ["get", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        # Unverified accounts first so pending approvals are easy to find.
+        return User.objects.order_by("is_verified", "-date_joined")
+
+    def perform_destroy(self, instance):
+        if instance.pk == self.request.user.pk:
+            raise PermissionDenied("You can't delete your own account.")
+        instance.delete()

@@ -1,25 +1,22 @@
 from django.contrib import admin
-from .models import Post, Like, Comment
+
+from .models import Comment, Like, Post
+
+
+class CommentInline(admin.TabularInline):
+    model = Comment
+    extra = 0
+    raw_id_fields = ("user",)
 
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ("title", "author", "is_published", "has_cover", "created_at")
-    list_filter = ("is_published", "created_at")
-    search_fields = ("title", "author__email", "author__username")
-    prepopulated_fields = {"slug": ("title",)}
-
-    @admin.display(boolean=True, description="Cover")
-    def has_cover(self, obj):
-        return bool(obj.cover_image or obj.cover_image_url)
+    list_display = ("title", "author", "category", "is_published", "created_at")
+    list_filter = ("is_published", "category")
+    search_fields = ("title", "author__username", "author__email")
+    raw_id_fields = ("author",)
+    readonly_fields = ("slug",)
+    inlines = [CommentInline]
 
 
-@admin.register(Comment)
-class CommentAdmin(admin.ModelAdmin):
-    list_display = ("post", "user", "created_at")
-    search_fields = ("post__title", "user__email")
-
-
-@admin.register(Like)
-class LikeAdmin(admin.ModelAdmin):
-    list_display = ("post", "user", "created_at")
+admin.site.register(Like)

@@ -51,11 +51,8 @@ if not SECRET_KEY:
             "The SECRET_KEY environment variable is required when DEBUG is off. "
             "Copy .env.example to .env and set one."
         )
-
 ALLOWED_HOSTS = [
-    "localhost",
-    "127.0.0.1",
-    ".onrender.com",
+    "backend-blogs-sspm.onrender.com",
 ]
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -162,11 +159,16 @@ SIMPLE_JWT = {
 # --------------------------------------------------------------------------- #
 # CORS
 # --------------------------------------------------------------------------- #
-CORS_ALLOWED_ORIGINS = env_list(
-    "CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-)
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
+CORS_ALLOWED_ORIGINS = [
+    "https://rajkumarayal.com.np",
+    "https://www.rajkumarayal.com.np",
+    "https://full-stack-django-nextjs-otpwithjwt.vercel.app",
+    "http://localhost:3000",
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://rajkumarayal.com.np",
+    "https://www.rajkumarayal.com.np",
+]
 # --------------------------------------------------------------------------- #
 # Static & media files
 # --------------------------------------------------------------------------- #

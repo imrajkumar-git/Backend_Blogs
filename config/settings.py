@@ -52,8 +52,11 @@ if not SECRET_KEY:
             "Copy .env.example to .env and set one."
         )
 
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "https://backend-blogs-sspm.onrender.com/")
-
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    ".onrender.com",
+]
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",

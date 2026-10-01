@@ -5,16 +5,18 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config, Csv
-import dj_database_url
-from dotenv import load_dotenv
-
-load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-DEBUG =  os.getenv("DEBUG", "True") == "True"
-FRONTEND_URL = config("FRONTEND_URL", default="https://full-stack-django-nextjs-otpwithjwt.vercel.app")
+SECRET_KEY = config("SECRET_KEY", default="dev-secret-key-change-me")
+DEBUG = config("DEBUG", default=True, cast=bool)
+ALLOWED_HOSTS = config(
+    "ALLOWED_HOSTS",
+    default="127.0.0.1,localhost,192.168.0.120",
+    cast=Csv(),
+)
+
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # Base URL used when building links inside emails (e.g. a "click to verify"
 # link, if you add one later). Falls back to FRONTEND_URL if not set.
 EMAIL_PAGE_DOMAIN = config("EMAIL_PAGE_DOMAIN", default=FRONTEND_URL)
@@ -37,7 +39,6 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-
     "django.middleware.security.SecurityMiddleware",
     'whitenoise.middleware.WhiteNoiseMiddleware',
     "corsheaders.middleware.CorsMiddleware",
@@ -50,15 +51,6 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "core.urls"
-ALLOWED_HOSTS = config(
-    "ALLOWED_HOSTS",
-    default="backend-blogs-sspm.onrender.com",
-    cast=Csv(),
-)
-# CORS_ALLOWED_ORIGINS / CSRF_TRUSTED_ORIGINS are the single source of truth
-# for allowed frontend origins — set further down, once, from FRONTEND_URL /
-# the CORS_ALLOWED_ORIGINS env var. (Previously this was defined twice in
-# this file; the second definition silently won, which was confusing.)
 
 TEMPLATES = [
     {
@@ -77,31 +69,15 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "core.wsgi.application"
-
 DATABASES = {
-    "default": dj_database_url.config(
-        default=os.getenv("Database_URL"),
-)
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+    }
 }
-
-
 # Database credentials come from the environment. Set DB_ENGINE=sqlite in
 # .env to develop against a local file instead of the hosted Postgres.
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.postgresql",
-#         "NAME": "neondb",
-#         "USER": "neondb_owner",
-#         "PASSWORD": "npg_4YDBNQ0hylng",
-#         "HOST": "ep-long-water-aencaknp-pooler.c-2.us-east-2.aws.neon.tech",
-#         "HOST":"ep-bold-waterfall-b49heore-pooler.c-6.us-east-2.aws.neon.tech",
-#         "PORT": "5432",
-#         "OPTIONS": {
-#             "sslmode": "require",
-#             "channel_binding": "require",
-#         },
-#     }
-# }
+
 # else:
 #     DATABASES = {
 #         "default": {
@@ -135,7 +111,7 @@ staticfiles_dirs = [BASE_DIR / "static"]
 staticfiles_storage='whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+
 # ---------------- Uploads ----------------
 # Largest cover image a blog author may upload, in bytes (default 5MB).
 BLOG_COVER_MAX_BYTES = config("BLOG_COVER_MAX_BYTES", default=5 * 1024 * 1024, cast=int)
@@ -178,7 +154,7 @@ SIMPLE_JWT = {
 # http://192.168.0.104:3000 (e.g. testing from another device on the network).
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default=f"{FRONTEND_URL},https://full-stack-django-nextjs-otpwithjwt.vercel.app",
+    default=f"{FRONTEND_URL},https://full-stack-django-nextjs-otpwithjwt.vercel.app,http://192.168.0.120:3000",
     cast=Csv(),
 )
 CORS_ALLOW_CREDENTIALS = True
@@ -190,13 +166,8 @@ EMAIL_HOST = config("EMAIL_HOST", default="smtp.gmail.com")
 EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
 EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 EMAIL_HOST_USER = 'rajkumararyal0977@gmail.com'
-EMAIL_HOST_PASSWORD = 'fbqf kosa gsjm wmtk'
+EMAIL_HOST_PASSWORD = 'pnierfurujtkbsbe'
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER)
-# Without this, a blocked/throttled SMTP port (common on Render's free tier)
-# can hang the whole request until the platform's own proxy times it out —
-# which returns a response with NO CORS headers at all, and looks in the
-# browser exactly like a CORS misconfiguration even though CORS is fine.
-EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=10, cast=int)
 
 # If no Gmail creds are set, fall back to printing emails to the console
 # so registration still works during local development.

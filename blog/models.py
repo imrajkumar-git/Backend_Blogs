@@ -1,13 +1,31 @@
-import uuid
+import os
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models.signals import post_delete
-from django.dispatch import receiver
 from django.utils.text import slugify
 
-from common.categories import BLOG_CATEGORIES
-from common.files import delete_file_after_commit
+
+def blog_cover_path(instance, filename):
+    """Store covers under media/blog_covers/<author id>/<filename>."""
+    base, ext = os.path.splitext(filename)
+    safe = slugify(base)[:60] or "cover"
+    return f"blog_covers/{instance.author_id or 'unassigned'}/{safe}{ext.lower()}"
+
+
+def validate_cover_image(file):
+    """Keep uploads to a sane size and to real image formats."""
+    max_bytes = getattr(settings, "BLOG_COVER_MAX_BYTES", 5 * 1024 * 1024)
+    if file.size > max_bytes:
+        raise ValidationError(
+            f"Cover image must be {max_bytes // (1024 * 1024)}MB or smaller."
+        )
+    ext = os.path.splitext(file.name)[1].lower()
+    allowed = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"}
+    if ext not in allowed:
+        raise ValidationError(
+            "Unsupported image type. Use JPG, PNG, WEBP, GIF or AVIF."
+        )
 
 
 class Post(models.Model):
@@ -15,48 +33,46 @@ class Post(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="posts"
     )
     title = models.CharField(max_length=200)
-    # Generated once from the title and never changed, so URLs stay stable.
-    slug = models.SlugField(max_length=80, unique=True, allow_unicode=True, editable=False)
+    slug = models.SlugField(max_length=220, unique=True, blank=True)
     excerpt = models.CharField(max_length=300, blank=True)
     content = models.TextField()
-    category = models.CharField(max_length=20, choices=BLOG_CATEGORIES, blank=True)
-    cover_image = models.FileField(upload_to="blog/covers/%Y/%m/", blank=True)
+    # Two ways to give a post a cover:
+    #   cover_image      — a file uploaded from the author's device (preferred)
+    #   cover_image_url  — an external URL, kept for existing posts
+    cover_image = models.ImageField(
+        upload_to=blog_cover_path,
+        blank=True,
+        null=True,
+        validators=[validate_cover_image],
+    )
+    cover_image_url = models.URLField(blank=True)
     is_published = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-created_at", "-id"]
-
-    def __str__(self):
-        return self.title
-
-    def _make_slug(self):
-        base = slugify(self.title, allow_unicode=True)[:60].strip("-") or "post"
-        candidate = base
-        while Post.objects.filter(slug=candidate).exists():
-            candidate = f"{base}-{uuid.uuid4().hex[:6]}"
-        return candidate
+        ordering = ["-created_at"]
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = self._make_slug()
+            base = slugify(self.title)[:200] or "post"
+            slug = base
+            i = 1
+            while Post.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                i += 1
+                slug = f"{base}-{i}"
+            self.slug = slug
         super().save(*args, **kwargs)
 
-
-class Comment(models.Model):
-    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
-    user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="blog_comments"
-    )
-    content = models.TextField(max_length=2000)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["created_at", "id"]
+    @property
+    def cover_source(self):
+        """The image the site should actually render, upload taking priority."""
+        if self.cover_image:
+            return self.cover_image.url
+        return self.cover_image_url or ""
 
     def __str__(self):
-        return f"{self.user} on {self.post}"
+        return self.title
 
 
 class Like(models.Model):
@@ -68,10 +84,23 @@ class Like(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["post", "user"], name="blog_like_unique_per_user")
+            models.UniqueConstraint(fields=["post", "user"], name="unique_post_like")
         ]
 
+    def __str__(self):
+        return f"{self.user} likes {self.post}"
 
-@receiver(post_delete, sender=Post)
-def _delete_cover(sender, instance, **kwargs):
-    delete_file_after_commit(instance.cover_image)
+
+class Comment(models.Model):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="comments"
+    )
+    content = models.TextField(max_length=1000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Comment by {self.user} on {self.post}"

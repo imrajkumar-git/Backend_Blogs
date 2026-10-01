@@ -163,7 +163,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://rajkumarayal.com.np",
     "https://www.rajkumarayal.com.np",
     "https://full-stack-django-nextjs-otpwithjwt.vercel.app",
-    "http://localhost:3000",
+    "http://localhost:3000",]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://rajkumarayal.com.np",

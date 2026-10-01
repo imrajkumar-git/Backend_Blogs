@@ -52,7 +52,7 @@ if not SECRET_KEY:
             "Copy .env.example to .env and set one."
         )
 
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
+ALLOWED_HOSTS =("*")  # Allow all hosts for now; tighten in production.
 
 INSTALLED_APPS = [
     "django.contrib.admin",
